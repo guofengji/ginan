@@ -1,10 +1,12 @@
 
+// #pragma GCC optimize ("O0")
+
 #include "observations.hpp"
 #include "streamTrace.hpp"
 #include "corrections.hpp"
 #include "ionoModel.hpp"
 #include "acsConfig.hpp"
-#include "constants.h"
+#include "constants.hpp"
 #include "satStat.hpp"
 #include "station.hpp"
 #include "common.hpp"
@@ -12,7 +14,7 @@
 
 #define PHASE_BIAS_STD 0.05
 
-extern int Ipp_in_range(GTime time, double *Ion_pp)
+int Ipp_in_range(GTime time, double *Ion_pp)
 {
 	switch (acsConfig.ionFilterOpts.model)
 	{
@@ -20,6 +22,7 @@ extern int Ipp_in_range(GTime time, double *Ion_pp)
 		case E_IonoModel::SPHERICAL_HARMONICS:	return Ipp_check_sphhar(time,Ion_pp);
 		case E_IonoModel::SPHERICAL_CAPS:		return Ipp_check_sphcap(time,Ion_pp);
 		case E_IonoModel::BSPLINE:				return Ipp_check_bsplin(time,Ion_pp);
+		case E_IonoModel::NONE:					return 0;
 	}
 	return 0;
 }
@@ -112,7 +115,7 @@ int update_receivr_measr(
 		if (obs.ionExclude) 
 			continue;
 
-		if (fabs(timediff(satStat.lastObsTime, obs.time)) > 300)
+		if (fabs(satStat.lastObsTime - obs.time) > 300)
 		{
 			satStat.ambvar	= 0;
 		}
@@ -121,7 +124,7 @@ int update_receivr_measr(
 		double varL = obs.Sigs.begin()->second.phasVar;
 		double varP = obs.Sigs.begin()->second.codeVar;
 
-		double amb = - (lc.GF_Phas_m + lc.GF_Code_m);	//todo aaron, the signs of these come out a bit weird
+		double amb = - (lc.GF_Phas_m + lc.GF_Code_m);
 
 		if	( fabs(lc.GF_Phas_m - lc_pre.GF_Phas_m) > 0.05		/* Basic cycle slip detection */
 			||satStat.ambvar <= 0)
@@ -156,9 +159,9 @@ int update_receivr_measr(
 }
 
 void write_receivr_measr(
-	Trace&				trace, 
-	std::list<Station*>	stations, 
-	GTime				time)
+	Trace&						trace, 
+	std::map<string, Station>	stations, 
+	GTime						time)
 {
 	int week;
 	double tow = time2gpst(time, &week);
@@ -170,22 +173,19 @@ void write_receivr_measr(
 
 	tracepdeex(2,stecfile,"\n#IONO_MEAS  week       tow        sta  sat  Iono. meas  Iono. var.  state  # layers");
 
-	if (nlayer<=0) 
+	if (nlayer <=0 ) 
 		tracepdeex(2,stecfile,"  Sta. ECEF X    Sta. ECEF Y    Sta. ECEF Z    Sat. ECEF X    Sat. ECEF Y    Sat. ECEF Z\n");
 	else 
 	{
-		for (int j=0; j<nlayer; j++) 
+		for (int j = 0; j < nlayer; j++) 
 			tracepdeex(2,stecfile,"   height   IPP lat.  IPP lon.  Slant F.");
 		
 		tracepdeex(2,stecfile,"\n");
 	}
 
 	int i = 0;
-	for (auto& rec_ptr : stations)
+	for (auto& [id, rec] : stations)
 	{
-		auto& rec = *rec_ptr;
-		//Trace& rectrc = *rec.trace.get();
-		
 		if (rec.obsList.size() < MIN_NSAT_STA) 
 			continue;
 
