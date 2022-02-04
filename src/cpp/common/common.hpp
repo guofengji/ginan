@@ -20,25 +20,41 @@
 #include "enums.h"
 
 
-#ifdef WIN32
-#define FILEPATHSEP '\\'
-#else
-#define FILEPATHSEP '/'
-#endif
+struct Average
+{
+	double	mean	= 0;
+	double	var		= 0;
+};
 
+
+void lowPassFilter(
+	Average&	avg,
+	double		meas,
+	double		procNoise,
+	double		measVar = 1);
 
 /* coordinates transformation ------------------------------------------------*/
 
 void ecef2enu(const double *pos, const double *r, double *e);
 void enu2ecef(const double *pos, const double *e, double *r);
 void xyz2enu (const double *pos, double *E);
-void eci2ecef(GTime tutc, const double *erpv, double *U, double *gmst);
+
+
+void eci2ecef(
+	const GTime		tutc,	
+	const double*	erpv,	
+	Matrix3d&		U,		
+	double*			gmst = nullptr);	
+
 void ecef2pos(const double *r, double *pos);
 void ecef2pos(Vector3d& r, double *pos);
-void pos2ecef(const double *pos, double *r);
+void pos2ecef(const double *pos, Vector3d& r);
 
 double geodist(Vector3d& rs, Vector3d& rr, Vector3d& e);
 
+double sagnac(
+	Vector3d& rSource,
+	Vector3d& rDest);
 
 //forward declarations
 struct prcopt_t;
@@ -61,21 +77,21 @@ int setbituInc(unsigned char *buff,int pos,int len,const unsigned int var);
 
 unsigned int crc24q (const unsigned char *buff, int len);
 
-double ymdhms2jd(const double time[6]);
-
 /* positioning models --------------------------------------------------------*/
 void dops(int ns, const double *azel, double elmin, double *dop);
 
-int  readblq(string file, const char *sta, double *odisp);
+int  readblq(string file, const char *sta, double *otlDisplacement);
 int  readerp(string file, erp_t *erp);
 int  geterp (const erp_t *erp, GTime time, double *val);
 
 
-int satexclude(SatSys& sat, int svh);
-
+int satexclude(SatSys& sat, E_Svh svh);
 
 extern int		epoch;
 extern GTime	tsync;
 
+void replaceTimes(
+	string&						str,		///< String to replace macros within
+	boost::posix_time::ptime	time_time);	///< Time to use for replacements
 
 #endif

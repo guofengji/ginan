@@ -4,7 +4,7 @@
 #define SMP2RESET	10
 
 
-map<E_Sys, bool> sys_solve;
+OutSys sys_solve;
 int NumEpocAR		   = 0;
 int NumEpocNL          = 0;
 int NEPOC2NL		   = 120;
@@ -16,8 +16,6 @@ bool AR_Iono_meas	= false;
 bool ENDUSR_MODE	= false;
 double biasOutrate	= 0;
 
-
-KFState KF_ARcopy;
 map<E_AmbTyp, ARState> ARcontr;
 
 /* extract default frequencies for each system */
@@ -29,6 +27,11 @@ int sys_frq(short int sys, E_FType& frq1, E_FType& frq2, E_FType& frq3)
 			frq1 = F1;
 			frq2 = F2;
 			frq3 = F5;
+			if (acsConfig.ionoOpts.iflc_freqs == +E_LinearCombo::L1L5_ONLY)
+			{
+				frq2 = F5; 
+				frq3 = F2;	
+			}
 			return 1;
 
 		case E_Sys::GLO:
@@ -47,9 +50,14 @@ int sys_frq(short int sys, E_FType& frq1, E_FType& frq2, E_FType& frq3)
 			frq1 = F1;
 			frq2 = F2;
 			frq3 = F5;
+			if (acsConfig.ionoOpts.iflc_freqs == +E_LinearCombo::L1L5_ONLY)
+			{
+				frq2 = F5; 
+				frq3 = F2;	
+			}
 			return 4;
 
-		case E_Sys::CMP:
+		case E_Sys::BDS:
 			frq1 = B1;
 			frq2 = B2;
 			frq3 = B3;
@@ -64,7 +72,7 @@ void start_from_acsConfig()
 	sys_solve[E_Sys::GPS] = acsConfig.ambrOpts.solvGPS;
 	sys_solve[E_Sys::GLO] = acsConfig.ambrOpts.solvGLO;
 	sys_solve[E_Sys::GAL] = acsConfig.ambrOpts.solvGAL;
-	sys_solve[E_Sys::CMP] = acsConfig.ambrOpts.solvBDS;
+	sys_solve[E_Sys::BDS] = acsConfig.ambrOpts.solvBDS;
 	sys_solve[E_Sys::QZS] = acsConfig.ambrOpts.solvQZS;
 
 	ARrefsta = "UNINIT";
@@ -154,7 +162,7 @@ int Load_rawmeas(Trace& trace, ObsList& obslst, KFState& kfState)
 
 		tracepdeex(3, trace, "\n#ARES_MEA Loading observables for %s-%s: %d %d %d", obs.mount, obs.Sat.id().c_str(), StatAmbMap_list[E_Sys::GPS].size(),  StatAmbMap_list[E_Sys::GAL].size(),  satpiv.size());
 
-		if (satpiv.find(sat) == satpiv.end() || satpiv[sat].elev.size() == 0)
+		if (satpiv.find(sat) == satpiv.end() || satpiv[sat].elev.empty())
 		{
 			tracepdeex(3, trace, "\n#ARES_MAIN Initializing satellite biases for %s", sat.id().c_str());
 			satpiv[sat].reset = true;
@@ -189,7 +197,7 @@ int Load_rawmeas(Trace& trace, ObsList& obslst, KFState& kfState)
 
 		auto& recpiv = SystAmbMap[rec];
 
-		double dtime = timediff(time, recpiv.update);
+		double dtime = time - recpiv.update;
 
 		if ( dtime > MEAS_OUTAG )
 		{
@@ -306,10 +314,11 @@ int Load_rawmeas(Trace& trace, ObsList& obslst, KFState& kfState)
 
 		if (ENDUSR_MODE)
 		{
-			if (acsConfig.ionoOpts.corr_mode == E_IonoMode::IONO_FREE_LINEAR_COMBO)
+			if (acsConfig.ionoOpts.corr_mode == +E_IonoMode::IONO_FREE_LINEAR_COMBO)
 			{
+				NLambKey = {KF::PHASE_BIAS, sat, rec, 12};
 				if (sat.sys == +E_Sys::GAL) 	NLambKey = {KF::PHASE_BIAS, sat, rec, 15};
-				else							NLambKey = {KF::PHASE_BIAS, sat, rec, 12};
+				if( sat.sys == +E_Sys::GPS && acsConfig.ionoOpts.iflc_freqs == +E_LinearCombo::L1L5_ONLY) NLambKey = {KF::PHASE_BIAS, sat, rec, 15};							
 			}
 		}
 		else
@@ -366,10 +375,13 @@ int Load_rawmeas(Trace& trace, ObsList& obslst, KFState& kfState)
 }
 
 /* Network ambiguity resolution */
-int networkAmbigResl( Trace& trace, StationList& stations, KFState& kfState)
+int networkAmbigResl(
+	Trace&		trace,
+	StationMap&	stations,
+	KFState&	kfState)
 {
-	if	(  acsConfig.ambrOpts.WLmode == E_ARmode::OFF
-		&& acsConfig.ambrOpts.NLmode == E_ARmode::OFF)
+	if	(  acsConfig.ambrOpts.WLmode == +E_ARmode::OFF
+		&& acsConfig.ambrOpts.NLmode == +E_ARmode::OFF)
 		return 0;
 
 	ENDUSR_MODE = false;
@@ -391,7 +403,7 @@ int networkAmbigResl( Trace& trace, StationList& stations, KFState& kfState)
 		if (acsConfig.process_ionosphere && acsConfig.ionFilterOpts.model != +E_IonoModel::NONE)
 			AR_Iono_meas = true;
 
-		if (acsConfig.output_biasSINEX && acsConfig.ambrOpts.biasOutrate > 0)		biasOutrate = acsConfig.ambrOpts.biasOutrate;
+		if (acsConfig.output_bias_sinex && acsConfig.ambrOpts.biasOutrate > 0)		biasOutrate = acsConfig.ambrOpts.biasOutrate;
 		else																	 	biasOutrate = 0;
 	}
 
@@ -427,14 +439,13 @@ int networkAmbigResl( Trace& trace, StationList& stations, KFState& kfState)
 					it++;
 			}
 
-			if (samb.SignList.size() == 0)		samb.reset = true;
+			if (samb.SignList.empty())			samb.reset = true;
 			else								samb.reset = false;
 		}
 	}
 
-	for (auto& rec_ptr : stations)
+	for (auto& [id, rec] : stations)
 	{
-		auto& rec = *rec_ptr;
 		auto& recOpts = acsConfig.getRecOpts(rec.id);
 
 		if (recOpts.exclude) continue;
@@ -477,14 +488,14 @@ int networkAmbigResl( Trace& trace, StationList& stations, KFState& kfState)
 
 	tracepdeex(3, trace, "\n#ARES_MAIN estimating WL ambiguities\n");
 
-	if (acsConfig.ambrOpts.WLmode != E_ARmode::OFF)
+	if (acsConfig.ambrOpts.WLmode != +E_ARmode::OFF)
 	{
 		WLambEstm(trace, kfState.time, ARcontr[E_AmbTyp::WL12], NLinactive);
 	}
 
 	tracepdeex(3, trace, "\n#ARES_MAIN estimating NL ambiguities\n");
 
-	if (acsConfig.ambrOpts.NLmode != E_ARmode::OFF && !NLinactive)
+	if (acsConfig.ambrOpts.NLmode != +E_ARmode::OFF && !NLinactive)
 	{
 		nfix = NLambEstm(trace, kfState, ARcontr[E_AmbTyp::NL12]);
 	}
@@ -497,7 +508,7 @@ int networkAmbigResl( Trace& trace, StationList& stations, KFState& kfState)
 /* Rover Ambiguity resolution */
 int enduserAmbigResl( Trace& trace, ObsList& obsList, KFState& kfState)
 {
-	if ( acsConfig.ambrOpts.WLmode == E_ARmode::OFF ) 
+	if ( acsConfig.ambrOpts.WLmode == +E_ARmode::OFF) 
 		return 0;
 
 	if ( obsList.size() <= 0 ) 
@@ -551,7 +562,7 @@ int enduserAmbigResl( Trace& trace, ObsList& obsList, KFState& kfState)
 	Load_rawmeas(trace, obsList, kfState);
 	updt_usr_pivot ( trace, acsConfig.ambrOpts.min_el_AR, rov );
 
-	if (acsConfig.ambrOpts.WLmode != E_ARmode::OFF)
+	if (acsConfig.ambrOpts.WLmode != +E_ARmode::OFF)
 	{
 		tracepdeex(trclvl, trace, "\n#ARES_MAIN estimating WL ambiguities\n");
 		ARState arcnt = ARcontr[E_AmbTyp::WL12];
@@ -559,7 +570,7 @@ int enduserAmbigResl( Trace& trace, ObsList& obsList, KFState& kfState)
 		WLambEstm(trace, kfState.time, arcnt, false);
 	}
 
-	if (acsConfig.ambrOpts.NLmode != E_ARmode::OFF)
+	if (acsConfig.ambrOpts.NLmode != +E_ARmode::OFF)
 	{
 		tracepdeex(trclvl, trace, "\n#ARES_MAIN estimating NL ambiguities\n");
 		ARState arcnt = ARcontr[E_AmbTyp::NL12];
